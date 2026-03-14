@@ -17,16 +17,14 @@ struct Placement {
     string vals;
 };
 
-// Hash set for forbidden words
 unordered_set<string> forbidden_words;
 
-// Simple function to add forbidden words
 void insert_forbidden(const string& s) {
     forbidden_words.insert(s);
     string r = s;
     reverse(r.begin(), r.end());
     if (r != s) {
-        forbidden_words.insert(r);  // Add reversed version too
+        forbidden_words.insert(r);
     }
 }
 
@@ -37,42 +35,26 @@ vector<string> req_words;
 vector<vector<Placement>> choices;
 unordered_set<string> unique_boards;
 Mask*** conflicts = nullptr;
-vector<vector<Mask>> domain_stack;  // NEW: Domain stack for efficient backtracking
 
 int dx[] = {-1, -1, 0, 1, 1, 1, 0, -1};
 int dy[] = {0, 1, 1, 1, 0, -1, -1, -1};
 
-// OPTIMIZED: Incremental forbidden word check (only check words touching this cell)
-bool creates_forbidden_incremental(int row, int col) {
+// OPTIMIZATION 1: Build word incrementally only in one direction (bidirectional check)
+bool creates_forbidden(int row, int col) {
     if (grid[row * width + col] == '.') return false;
     
     for (int dir = 0; dir < 8; ++dir) {
         string word = "";
         
-        // Extend backward from this position
-        int back_r = row - dx[dir];
-        int back_c = col - dy[dir];
-        while (back_r >= 0 && back_r < height && back_c >= 0 && back_c < width && 
-               grid[back_r * width + back_c] != '.') {
-            word = grid[back_r * width + back_c] + word;
-            back_r -= dx[dir];
-            back_c -= dy[dir];
+        // Build word extending in current direction
+        int r = row, c = col;
+        while (r >= 0 && r < height && c >= 0 && c < width && grid[r * width + c] != '.') {
+            word += grid[r * width + c];
+            r += dx[dir];
+            c += dy[dir];
         }
         
-        // Add current letter
-        word += grid[row * width + col];
-        
-        // Extend forward
-        int fwd_r = row + dx[dir];
-        int fwd_c = col + dy[dir];
-        while (fwd_r >= 0 && fwd_r < height && fwd_c >= 0 && fwd_c < width && 
-               grid[fwd_r * width + fwd_c] != '.') {
-            word += grid[fwd_r * width + fwd_c];
-            fwd_r += dx[dir];
-            fwd_c += dy[dir];
-        }
-        
-        // Only check words of length >= 2
+        // Check if word length >= 2 and is forbidden
         if (word.length() >= 2 && forbidden_words.count(word)) {
             return true;
         }
@@ -80,17 +62,16 @@ bool creates_forbidden_incremental(int row, int col) {
     return false;
 }
 
-// Full board check (only called when board is complete)
 bool final_safety_check() {
     for (int row = 0; row < height; ++row) {
         for (int col = 0; col < width; ++col) {
-            if (creates_forbidden_incremental(row, col)) return true;
+            if (creates_forbidden(row, col)) return true;
         }
     }
     return false;
 }
 
-// OPTIMIZED: Use incremental check and avoid full copies
+// OPTIMIZATION 2: Early termination in fill_remaining
 void fill_remaining(int cell_idx, const vector<int>& empty_cells) {
     if (cell_idx == (int)empty_cells.size()) {
         if (!final_safety_check()) {
@@ -99,25 +80,31 @@ void fill_remaining(int cell_idx, const vector<int>& empty_cells) {
         return;
     }
 
+    // Early exit for one_solution mode
+    if (mode == "one_solution" && !unique_boards.empty()) {
+        return;
+    }
+
     int pos = empty_cells[cell_idx];
-    int row = pos / width, col = pos % width;
+    int row = pos / width;
+    int col = pos % width;
     
     for (char c = 'a'; c <= 'z'; ++c) {
         grid[pos] = c;
-        // OPTIMIZED: Only check this cell, not the entire board
-        if (!creates_forbidden_incremental(row, col)) {
+        if (!creates_forbidden(row, col)) {
             fill_remaining(cell_idx + 1, empty_cells);
-            if (mode == "one_solution" && !unique_boards.empty()) {
-                grid[pos] = '.';
-                return;
-            }
         }
     }
     grid[pos] = '.';
 }
 
-// OPTIMIZED: Pass domains by reference and use domain stack
-void solve_required(int w_idx) {
+// OPTIMIZATION 3: Early termination and bounds checking
+void solve_required(int w_idx, vector<Mask> domains) {
+    // Early exit for one_solution mode
+    if (mode == "one_solution" && !unique_boards.empty()) {
+        return;
+    }
+
     if (w_idx == (int)req_words.size()) {
         vector<int> empty_cells;
         for (int i = 0; i < total_cells; ++i) {
@@ -134,18 +121,18 @@ void solve_required(int w_idx) {
         return;
     }
 
-    // Get current domains from stack
-    vector<Mask>& current_domains = domain_stack.back();
-    Mask active = current_domains[w_idx];
+    Mask active = domains[w_idx];
+    int choices_size = (int)choices[w_idx].size();
     
-    for (int p_idx = 0; p_idx < (int)choices[w_idx].size(); ++p_idx) {
-        if (!active.test(p_idx)) continue;  // Skip inactive placements
+    for (int p_idx = 0; p_idx < choices_size; ++p_idx) {
+        if (!active.test(p_idx)) continue;
 
         const auto& p = choices[w_idx][p_idx];
         bool overlap_fail = false;
         vector<pair<int, char>> memo;
+        memo.reserve(p.pos.size());
 
-        // Verify word can fit with existing letters
+        // Check overlap
         for (size_t i = 0; i < p.pos.size(); ++i) {
             if (grid[p.pos[i]] != '.' && grid[p.pos[i]] != p.vals[i]) {
                 overlap_fail = true;
@@ -154,7 +141,7 @@ void solve_required(int w_idx) {
         }
         if (overlap_fail) continue;
 
-        // Place word and save state
+        // Place word
         for (size_t i = 0; i < p.pos.size(); ++i) {
             if (grid[p.pos[i]] == '.') {
                 memo.push_back({p.pos[i], '.'});
@@ -162,22 +149,23 @@ void solve_required(int w_idx) {
             }
         }
 
-        // Update domains for future words based on this choice
+        // Update domains
+        vector<Mask> next_domains = domains;
         bool dead_end = false;
-        vector<Mask> next_domains = current_domains;
         
         for (int n_w = w_idx + 1; n_w < (int)req_words.size(); ++n_w) {
-            next_domains[n_w] &= conflicts[w_idx][p_idx][n_w];
-            if (next_domains[n_w].none()) {
-                dead_end = true;
-                break;
+            // SAFETY: bounds check before accessing conflicts array
+            if (p_idx < MAX_P && n_w < (int)req_words.size()) {
+                next_domains[n_w] &= conflicts[w_idx][p_idx][n_w];
+                if (next_domains[n_w].none()) {
+                    dead_end = true;
+                    break;
+                }
             }
         }
 
         if (!dead_end) {
-            domain_stack.push_back(next_domains);
-            solve_required(w_idx + 1);
-            domain_stack.pop_back();
+            solve_required(w_idx + 1, next_domains);
         }
 
         // Backtrack
@@ -185,7 +173,9 @@ void solve_required(int w_idx) {
             grid[m.first] = m.second;
         }
         
-        if (mode == "one_solution" && !unique_boards.empty()) return;
+        if (mode == "one_solution" && !unique_boards.empty()) {
+            return;
+        }
     }
 }
 
@@ -210,7 +200,6 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Sort longest to shortest (helps prune search space faster)
     sort(req_words.begin(), req_words.end(), [](const string& a, const string& b) {
         return a.length() > b.length();
     });
@@ -219,7 +208,6 @@ int main(int argc, char* argv[]) {
     choices.resize(n);
     vector<Mask> initial_domains(n);
 
-    // Precalculate every placement for every word on an empty board
     for (int i = 0; i < n; ++i) {
         int len = req_words[i].length();
         for (int row = 0; row < height; row++) {
@@ -243,12 +231,10 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // OPTIMIZED: Allocate conflicts array only for actual placement counts
     conflicts = new Mask**[n];
     for (int i = 0; i < n; ++i) {
-        int num_placements = min((int)choices[i].size(), MAX_P);
-        conflicts[i] = new Mask*[num_placements];
-        for (int p = 0; p < num_placements; ++p) {
+        conflicts[i] = new Mask*[MAX_P];
+        for (int p = 0; p < MAX_P; ++p) {
             conflicts[i][p] = new Mask[n];
             for (int j = 0; j < n; ++j) {
                 conflicts[i][p][j].set();
@@ -256,21 +242,18 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Fill conflict matrix (mark which instances clash)
     for (int i = 0; i < n; ++i) {
-        int i_placements = min((int)choices[i].size(), MAX_P);
-        for (int p1 = 0; p1 < i_placements; ++p1) {
+        for (int p1 = 0; p1 < (int)choices[i].size() && p1 < MAX_P; ++p1) {
             for (int j = 0; j < n; ++j) {
                 if (i == j) continue;
-                int j_placements = min((int)choices[j].size(), MAX_P);
-                for (int p2 = 0; p2 < j_placements; ++p2) {
-                    bool conflicts_found = false;
-                    for (size_t k1 = 0; k1 < choices[i][p1].pos.size() && !conflicts_found; ++k1) {
+                for (int p2 = 0; p2 < (int)choices[j].size() && p2 < MAX_P; ++p2) {
+                    bool found_conflict = false;
+                    for (size_t k1 = 0; k1 < choices[i][p1].pos.size() && !found_conflict; ++k1) {
                         for (size_t k2 = 0; k2 < choices[j][p2].pos.size(); ++k2) {
                             if (choices[i][p1].pos[k1] == choices[j][p2].pos[k2] &&
                                 choices[i][p1].vals[k1] != choices[j][p2].vals[k2]) {
                                 conflicts[i][p1][j].reset(p2);
-                                conflicts_found = true;
+                                found_conflict = true;
                                 break;
                             }
                         }
@@ -280,16 +263,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Initialize domain stack with initial domains
-    domain_stack.push_back(initial_domains);
+    solve_required(0, initial_domains);
 
-    // Solve using optimized backtracking
-    solve_required(0);
-
-    // Output results
     if (unique_boards.empty()) {
         out << "No solutions found" << endl;
-    } else if (mode == "one_solution") {
+        return 0;
+    }
+
+    if (mode == "one_solution") {
         out << "Board:" << endl;
         const string& s = *unique_boards.begin();
         for (int i = 0; i < height; ++i) {
@@ -315,8 +296,7 @@ int main(int argc, char* argv[]) {
 
     // Cleanup
     for (int i = 0; i < n; ++i) {
-        int num_placements = min((int)choices[i].size(), MAX_P);
-        for (int p = 0; p < num_placements; ++p) {
+        for (int p = 0; p < MAX_P; ++p) {
             delete[] conflicts[i][p];
         }
         delete[] conflicts[i];
