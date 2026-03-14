@@ -79,115 +79,51 @@ void insert_forbidden(const string& s) {
     int curr = 0;
 40
     for (char c : s) {
-41
-        int idx = c - 'a';
-42
-        if (!trie_flat[curr * 26 + idx]) trie_flat[curr * 26 + idx] = trie_count++;
-43
-        curr = trie_flat[curr * 26 + idx];
-44
+        int v = c - 'a';
+        if (trie[curr].children[v] == -1) {
+            trie[curr].children[v] = trie.size();
+            trie.push_back(TrieNode());
+        }
+        curr = trie[curr].children[v];
     }
-45
-    trie_end[curr] = true;
-46
+    trie[curr].is_end = true; //mark that a forbidden word ends here
 }
-47
-​
-48
-//inline for maximum speed since this is called very often in the backtracking
-49
-//it reduces function-call overhead by telling compiler to replace calls to this function
-50
-// with the actual code of the function
-51
-//check if placing a letter at (row, col) would create a forbidden word
-52
-inline bool is_safe(int row, int col) {
-53
+
+int width, height, total_cells;
+char grid[2601];
+string mode;
+vector<string> req_words;
+vector<vector<Placement>> choices;
+set<string> unique_boards; // set automatically gets rid of duplicates
+Mask*** conflicts = nullptr; //if word 1 is at x, word 2 can't be at y
+
+int dx[] = {-1, -1, 0, 1, 1, 1, 0, -1};
+int dy[] = {0, 1, 1, 1, 0, -1, -1, -1};
+
+//checks if any direction form a word found in Trie
+bool creates_forbidden(int row, int col) {
     for (int dir = 0; dir < 8; ++dir) {
-54
-        //only checks windows that overlap (row, col). 
-55
-        for (int offset = 0; offset < max_f_len; ++offset) {
-56
-            int start_row = row - dx[dir] * offset, start_col = col - dy[dir] * offset;
-57
-            
-58
-            if (start_row < 0 || start_row >= height || start_col < 0 || start_col >= width) continue;
-59
-​
-60
-            int node = 0;
-61
-            for (int i = 0; i < max_f_len; ++i) {
-62
-                int current_row = start_row + dx[dir] * i;
-63
-                int current_col = start_col + dy[dir] * i;
-64
-                
-65
-                if (current_row < 0 || current_row >= height || current_col < 0 || current_col >= width) break;
-66
-                
-67
-                char val = grid[current_row * width + current_col];
-68
-                if (val == '.') break; 
-69
-​
-70
-                node = trie_flat[node * 26 + (val - 'a')];
-71
-                if (!node) break; 
-72
-                
-73
-                if (trie_end[node] && i >= offset) return false;
-74
-            }
-75
+        int curr = 0;
+        for (int k = 0; ; ++k) {
+            int new_row = row + dx[dir] * k, new_col = col + dy[dir] * k;
+            //stop if off board or if cell is still empty
+            if (new_row < 0 || new_row >= height || new_col < 0 || new_col >= width || grid[new_row * width + new_col] == '.') break;
+            int v = grid[new_row * width + new_col] - 'a';
+            if (trie[curr].children[v] == -1) break;
+            curr = trie[curr].children[v];
+            if (trie[curr].is_end) return true; //found full forbidden word
         }
-76
     }
-77
-    return true;
-78
+    return false;
 }
-79
-​
-80
-//forward check, that every empty cell still has at least one valid letter
-81
-bool has_future_deadspot(int start_pos) { 
-82
-    //only check the very next empty cell. 
-83
-    for (int p = start_pos + 1; p < total_cells; ++p) {
-84
-        if (grid[p] == '.') {
-85
-            int row = p / width, col = p % width;
-86
-            bool possible = false;
-87
-            for (int i = 0; i < 26; ++i) {
-88
-                grid[p] = alpha[i];
-89
-                if (is_safe(row, col)) { possible = true; grid[p] = '.'; break; }
-90
-            }
-91
-            grid[p] = '.';
-92
-            return !possible; //can't be filled
-93
+
+//scans the entire board for forbidden words
+bool final_safety_check() {
+    for (int row = 0; row < height; ++row) {
+        for (int col = 0; col < width; ++col) {
+            if (creates_forbidden(row, col)) return true;
         }
-94
     }
-95
     return false;
 96
 }
@@ -361,83 +297,75 @@ int main(int argc, char* argv[]) {
         if (type == "+") required_words.push_back(val);
 181
         else {
-182
-            insert_forbidden(val);
-183
-            string rev = val; reverse(rev.begin(), rev.end());
-184
-            insert_forbidden(rev);
-185
+            insert_forbidden(v); 
+            //add reversed too
+            string r = v; reverse(r.begin(), r.end());
+            if (r != v) insert_forbidden(r); 
         }
-186
     }
-187
-​
-188
-    //sort by least options
-189
-    vector<pair<int, int>> meta;
-190
-    for (int i = 0; i < (int)required_words.size(); ++i) {
-191
-        vector<Placement> opts;
-192
-        int len = required_words[i].length();
-193
-        for (int row = 0; row < height; ++row) {
-194
-            for (int col = 0; col < width; ++col) {
-195
-                for (int dir = 0; dir < 8; ++dir) {
-196
-                    if (row+dx[dir]*(len-1)>=0 && row+dx[dir]*(len-1)<height && col+dy[dir]*(len-1)>=0 && col+dy[dir]*(len-1)<width)
-197
-                        opts.push_back({row, col, dir});
-198
+
+    //sort longest to shortest
+    sort(req_words.begin(), req_words.end(), [](const string& a, const string& b){
+        return a.length() > b.length();
+    });
+
+    int n = req_words.size();
+    choices.resize(n);
+    vector<Mask> initial_domains(n);
+
+    //precalculate every placement for every word on an empty board
+    for (int i = 0; i < n; ++i) {
+        int len = req_words[i].length();
+        for (int row=0; row<height; row++) for (int col=0; col<width; col++) for (int dir=0; dir<8; dir++) {
+            int end_row = row + dx[dir]*(len-1), end_col = col + dy[dir]*(len-1);
+            if (end_row >= 0 && end_row < height && end_col >= 0 && end_col < width) {
+                Placement p;
+                for (int k=0; k<len; k++) {
+                    p.pos.push_back((row+dx[dir]*k)*width + (col+dy[dir]*k));
+                    p.vals.push_back(req_words[i][k]);
                 }
-199
+                choices[i].push_back(p);
+                if(choices[i].size() <= MAX_P) initial_domains[i].set(choices[i].size()-1);
             }
-200
         }
-201
-        word_placements.push_back(opts);
-202
-        meta.push_back({(int)opts.size(), i});
-203
     }
-204
-    sort(meta.begin(), meta.end());
-205
-    vector<string> sw; vector<vector<Placement>> sp;
-206
-    for (vector<pair<int, int> >::iterator it = meta.begin(); it != meta.end(); ++it) {
-207
-        sw.push_back(required_words[it->second]);
-208
-        sp.push_back(word_placements[it->second]);
-209
+
+    //conflict matrix
+    conflicts = new Mask**[n];
+    for(int i=0; i<n; ++i) {
+        conflicts[i] = new Mask*[MAX_P];
+        for(int p=0; p<MAX_P; ++p) {
+            conflicts[i][p] = new Mask[n];
+            for(int j=0; j<n; ++j) conflicts[i][p][j].set();
+        }
     }
-210
-    required_words = sw; word_placements = sp;
-211
-​
-212
-    solve_required(0);
-213
-​
-214
-    //remove duplicates since solutions are stored in vector for speed/memory
-215
-    sort(solutions.begin(), solutions.end());
-216
-    solutions.erase(unique(solutions.begin(), solutions.end()), solutions.end());
-217
-​
-218
-    if (solutions.empty()) {
-219
-        outfile << "No solutions found" << endl;
-220
+
+    //fill conflict matrix (mark which instances clash - use same cell but have diff letter)
+    for (int i = 0; i < n; ++i) {
+        for (int p1 = 0; p1 < (int)choices[i].size() && p1 < MAX_P; ++p1) {
+            for (int j = 0; j < n; ++j) {
+                if (i == j) continue;
+                for (int p2 = 0; p2 < (int)choices[j].size() && p2 < MAX_P; ++p2) {
+                    for (size_t k1=0; k1<choices[i][p1].pos.size(); ++k1) {
+                        for (size_t k2=0; k2<choices[j][p2].pos.size(); ++k2) {
+                            if (choices[i][p1].pos[k1] == choices[j][p2].pos[k2] && 
+                                choices[i][p1].vals[k1] != choices[j][p2].vals[k2]) {
+                                conflicts[i][p1][j].reset(p2);
+                                goto next_p2;
+                            }
+                        }
+                    }
+                    next_p2:;
+                }
+            }
+        }
+    }
+
+    solve_required(0, initial_domains);
+
+    
+    if (unique_boards.empty()) {
+        out << "No solutions found" << endl;
         return 0;
 221
     }
