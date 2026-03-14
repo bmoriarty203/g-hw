@@ -46,6 +46,14 @@ void insert_forbidden(const string& s) {
     trie_end[curr] = true;
 }
 
+inline bool in_bounds(int r, int c) {
+    return r >= 0 && r < height && c >= 0 && c < width;
+}
+
+inline int get_trie_index(int node, char ch) {
+    return trie_flat[node * 26 + (ch - 'a')];
+}
+
 //inline for maximum speed since this is called very often in the backtracking
 //it reduces function-call overhead by telling compiler to replace calls to this function
 // with the actual code of the function
@@ -81,14 +89,6 @@ inline bool is_safe(int row, int col) {
         }
     }
     return true;
-}
-
-inline bool in_bounds(int r, int c) {
-    return r >= 0 && r < height && c >= 0 && c < width;
-}
-
-inline int get_trie_index(int node, char ch) {
-    return trie_flat[node * 26 + (ch - 'a')];
 }
 
 //forward check, that every empty cell still has at least one valid letter
