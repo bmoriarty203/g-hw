@@ -50,12 +50,13 @@ Mask*** conflicts = nullptr; //if word 1 is at x, word 2 can't be at y
 
 int dx[] = {-1, -1, 0, 1, 1, 1, 0, -1};
 int dy[] = {0, 1, 1, 1, 0, -1, -1, -1};
+int max_forbidden_len = 0; // Maximum length of forbidden words
 
 //checks if any direction form a word found in Trie
 bool creates_forbidden(int row, int col) {
     for (int dir = 0; dir < 8; ++dir) {
         int curr = 0;
-        for (int k = 0; ; ++k) {
+        for (int k = 0; k < max_forbidden_len; ++k) { // Limit scan range
             int new_row = row + dx[dir] * k, new_col = col + dy[dir] * k;
             //stop if off board or if cell is still empty
             if (new_row < 0 || new_row >= height || new_col < 0 || new_col >= width || grid[new_row * width + new_col] == '.') break;
@@ -168,6 +169,7 @@ int main(int argc, char* argv[]) {
             string r = v; reverse(r.begin(), r.end());
             if (r != v) insert_forbidden(r); 
         }
+        max_forbidden_len = max(max_forbidden_len, (int)v.length()); // Update max forbidden length
     }
 
     //sort longest to shortest
