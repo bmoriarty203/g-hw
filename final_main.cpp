@@ -51,26 +51,31 @@ void insert_forbidden(const string& s) {
 //check if placing a letter at (row, col) would create a forbidden word
 inline bool is_safe(int row, int col) {
     for (int dir = 0; dir < 8; ++dir) {
-        //only checks windows that overlap (row, col). 
         for (int offset = 0; offset < max_f_len; ++offset) {
-            int start_row = row - dx[dir] * offset, start_col = col - dy[dir] * offset;
+            int start_row = row - dx[dir] * offset;
+            int start_col = col - dy[dir] * offset;
             
             if (start_row < 0 || start_row >= height || start_col < 0 || start_col >= width) continue;
 
             int node = 0;
+            bool valid_window = true;
             for (int i = 0; i < max_f_len; ++i) {
                 int current_row = start_row + dx[dir] * i;
                 int current_col = start_col + dy[dir] * i;
                 
                 if (current_row < 0 || current_row >= height || current_col < 0 || current_col >= width) break;
                 
-                char val = grid[current_row * width + current_col];
-                if (val == '.') break; 
-
-                node = trie_flat[node * 26 + (val - 'a')];
-                if (!node) break; 
+                char ch = grid[current_row * width + current_col];
+                if (ch == '.') break;
                 
-                if (trie_end[node] && i >= offset) return false;
+                int idx = ch - 'a';
+                if (!trie_flat[node * 26 + idx]) {
+                    valid_window = false;
+                    break;
+                }
+                node = trie_flat[node * 26 + idx];
+                
+                if (trie_end[node]) return false; // Found forbidden word early
             }
         }
     }
