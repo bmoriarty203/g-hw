@@ -15,6 +15,7 @@ int trie_flat[MAX_NODES * 26]; //
 bool trie_end[MAX_NODES];
 int trie_count = 1; //trie_count starts at 1 because 0 is the root node and is already initialized
 char grid[MAX_DIM];
+char solution[MAX_DIM];
 int width, height, total_cells;
 int max_f_len = 0; //max length of forbidden words to optimize trie checks
 string mode; //"one_solution" or "all_solutions"
@@ -104,7 +105,8 @@ bool has_future_deadspot(int start_pos) {
 void fill_grid(int pos) {
     if (mode == "one_solution" && !solutions.empty()) return;
     if (pos == total_cells) {
-        solutions.push_back(string(grid, total_cells));
+        memcpy(solution, grid, total_cells);
+        solutions.push_back(string(solution, total_cells));
         return;
     }
     if (grid[pos] != '.') { //cell already has a letter
